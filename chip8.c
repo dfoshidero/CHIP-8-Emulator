@@ -335,7 +335,7 @@ void print_debug_info(chip8_t *chip8)
         printf("Check if V%X (0x%02X) == NN (0x%02X). Skip next instruction if true.\n\n", chip8->inst.X, chip8->V[chip8->inst.X], chip8->inst.NN);
         break;
     case 0x04:
-        // 0x4XNN: skip next instruction if VX 1= NN
+        // 0x4XNN: skip next instruction if VX != NN
         printf("Check if V%X (0x%02X) != NN (0x%02X). Skip next instruction if true.\n\n", chip8->inst.X, chip8->V[chip8->inst.X], chip8->inst.NN);
         break;
     case 0x05:
@@ -421,309 +421,325 @@ void print_debug_info(chip8_t *chip8)
             break;
         }
         break;
-        case 0x0A:
-            // 0xANNN: set index register I to NNN
-            printf("Set index register I to NNN (0x%04X)\n\n", chip8->inst.NNN);
-            break;
-        case 0x0D:
-            // 0xDXYN: Draw sprite at coordinate (VX, VY), read from memory location I
-            // sprite width 8, height N
-            // screen pixels are XOR'd with sprite bits
-            // VF (carry flag) set if any screen pixels are set off. Important for collision detection etc.
-            printf("Drawing N (%u) height sprite at coords V%X (0x%02X), V%X (0x%02X) "
-                   "from memory location I (0x%04X).\nSet VF = 1 if any pixels are off.\n\n",
-                   chip8->inst.N, chip8->inst.X, chip8->V[chip8->inst.X], chip8->inst.Y, chip8->V[chip8->inst.Y], chip8->I);
-            break;
-        default:
-            printf("Unimplemented OpCode.\n\n");
-            break; // invalid opcode
-        }
-    };
+    case 0x09:
+        // 0x9XY0: skip next instruction if VX != NN
+        printf("Check if V%X (0x%02X) != V%X (0x%02X). Skip next instruction if true.\n\n", chip8->inst.X, chip8->V[chip8->inst.X], chip8->inst.Y, chip8->V[chip8->inst.Y]);
+        break;
+    case 0x0A:
+        // 0xANNN: set index register I to NNN
+        printf("Set index register I to NNN (0x%04X)\n\n", chip8->inst.NNN);
+        break;
+    case 0x0D:
+        // 0xDXYN: Draw sprite at coordinate (VX, VY), read from memory location I
+        // sprite width 8, height N
+        // screen pixels are XOR'd with sprite bits
+        // VF (carry flag) set if any screen pixels are set off. Important for collision detection etc.
+        printf("Drawing N (%u) height sprite at coords V%X (0x%02X), V%X (0x%02X) "
+               "from memory location I (0x%04X).\nSet VF = 1 if any pixels are off.\n\n",
+               chip8->inst.N, chip8->inst.X, chip8->V[chip8->inst.X], chip8->inst.Y, chip8->V[chip8->inst.Y], chip8->I);
+        break;
+    default:
+        printf("Unimplemented OpCode.\n\n");
+        break; // invalid opcode
+    }
+};
 #endif
 
-    // Emulate chip8 instructions:
-    void emulateInstructions(chip8_t * chip8, const config_t config)
-    {
-        // get next opcode from ram
-        chip8->inst.opcode = chip8->ram[chip8->PC] << 8 | chip8->ram[chip8->PC + 1];
-        chip8->PC += 2; // pre-increment pc to get next op code
+// Emulate chip8 instructions:
+void emulateInstructions(chip8_t *chip8, const config_t config)
+{
+    // get next opcode from ram
+    chip8->inst.opcode = chip8->ram[chip8->PC] << 8 | chip8->ram[chip8->PC + 1];
+    chip8->PC += 2; // pre-increment pc to get next op code
 
-        // fill out current instruction format
-        //  DXYN
-        chip8->inst.NNN = chip8->inst.opcode & 0x0FFF;
-        chip8->inst.NN = chip8->inst.opcode & 0x0FF;
-        chip8->inst.N = chip8->inst.opcode & 0x0F;
-        chip8->inst.X = (chip8->inst.opcode >> 8) & 0x0F;
-        chip8->inst.Y = (chip8->inst.opcode >> 4) & 0x0F;
+    // fill out current instruction format
+    //  DXYN
+    chip8->inst.NNN = chip8->inst.opcode & 0x0FFF;
+    chip8->inst.NN = chip8->inst.opcode & 0x0FF;
+    chip8->inst.N = chip8->inst.opcode & 0x0F;
+    chip8->inst.X = (chip8->inst.opcode >> 8) & 0x0F;
+    chip8->inst.Y = (chip8->inst.opcode >> 4) & 0x0F;
 
 #ifdef DEBUG
-        print_debug_info(chip8);
+    print_debug_info(chip8);
 #endif
 
-        // emulate opcode
-        switch ((chip8->inst.opcode >> 12) & 0x0F)
+    // emulate opcode
+    switch ((chip8->inst.opcode >> 12) & 0x0F)
+    {
+    case 0x00:
+        // subroutine at NN
+        if (chip8->inst.NN == 0xE0)
         {
-        case 0x00:
-            // subroutine at NN
-            if (chip8->inst.NN == 0xE0)
+            // 0x00E0: clear screen
+            memset(chip8->display, false, sizeof chip8->display);
+        }
+        else if (chip8->inst.NN == 0xEE)
+        {
+            // 0x00EE: return from subroutine
+            // set program counter to last address on stack ("pop from stack")
+            //  so next opcode will be pulled from that address
+            chip8->PC = *--chip8->stack_ptr;
+        }
+        else
+        {
+            // Unimplemented/invalid opcode, may be 0xNNN for calling machine code routine for RCA1802
+        }
+        break;
+
+    case 0x01:
+        // 0x1NNN: jumps to address NNN
+        chip8->PC = chip8->inst.NNN; // set program counter so next opcode is from NNN.
+        break;
+
+    case 0x02:
+        // 0x2NNN: call subroutine at NNN
+        *chip8->stack_ptr++ = chip8->PC; // store current address to return to on subroutine stack ("push on stack")
+        chip8->PC = chip8->inst.NNN;     // set program counter to subroutine address to pull next opcode.
+        break;
+
+    case 0x03:
+        // 0x3XNN: skip next instruction if VX == NN
+        if (chip8->V[chip8->inst.X] == chip8->inst.NN)
+        {
+            chip8->PC += 2; // skip next op code.
+        }
+        break;
+
+    case 0x04:
+        // 0x4XNN: skip next instruction if VX != NN
+        if (chip8->V[chip8->inst.X] != chip8->inst.NN)
+        {
+            chip8->PC += 2; // skip next op code.
+        }
+        break;
+
+    case 0x05:
+        // 0x5XY0: skip next instruction if VX == VY
+        if (chip8->inst.N != 0)
+        {
+            break; // wrong opcode
+        }
+        if (chip8->V[chip8->inst.X] == chip8->V[chip8->inst.Y])
+        {
+            chip8->PC += 2; // skip next op code.
+        }
+        break;
+
+    case 0x06:
+        // 0x6XNN: sets VX to NN
+        chip8->V[chip8->inst.X] = chip8->inst.NN;
+        break;
+
+    case 0x07:
+        // 0x7XNN: sets register VX += NN
+        chip8->V[chip8->inst.X] += chip8->inst.NN;
+        break;
+
+    case 0x08:
+
+        switch (chip8->inst.N)
+        {
+        case 0:
+            // 0x8XY0: sets VX = VY
+            chip8->V[chip8->inst.X] = chip8->V[chip8->inst.Y];
+            break;
+
+        case 1:
+            // 0x8XY1: sets VX |= VY
+            chip8->V[chip8->inst.X] |= chip8->V[chip8->inst.Y];
+            break;
+
+        case 2:
+            // 0x8XY2: sets VX &= VY
+            chip8->V[chip8->inst.X] &= chip8->V[chip8->inst.Y];
+            break;
+
+        case 3:
+            // 0x8XY3: sets VX ^= VY
+            chip8->V[chip8->inst.X] ^= chip8->V[chip8->inst.Y];
+            break;
+
+        case 4:
+            // 0x8XY4: sets VX += VY, set VF to 1 if carry, and 0 when not
+            if ((uint16_t)(chip8->V[chip8->inst.X] + chip8->V[chip8->inst.Y]) > 255)
             {
-                // 0x00E0: clear screen
-                memset(chip8->display, false, sizeof chip8->display);
-            }
-            else if (chip8->inst.NN == 0xEE)
-            {
-                // 0x00EE: return from subroutine
-                // set program counter to last address on stack ("pop from stack")
-                //  so next opcode will be pulled from that address
-                chip8->PC = *--chip8->stack_ptr;
+                chip8->V[0xF] = 1;
+                chip8->V[chip8->inst.X] += chip8->V[chip8->inst.Y];
             }
             else
             {
-                // Unimplemented/invalid opcode, may be 0xNNN for calling machine code routine for RCA1802
-            }
+                chip8->V[0xF] = 0;
+                chip8->V[chip8->inst.X] += chip8->V[chip8->inst.Y];
+            };
             break;
 
-        case 0x01:
-            // 0x1NNN: jumps to address NNN
-            chip8->PC = chip8->inst.NNN; // set program counter so next opcode is from NNN.
-            break;
-
-        case 0x02:
-            // 0x2NNN: call subroutine at NNN
-            *chip8->stack_ptr++ = chip8->PC; // store current address to return to on subroutine stack ("push on stack")
-            chip8->PC = chip8->inst.NNN;     // set program counter to subroutine address to pull next opcode.
-            break;
-
-        case 0x03:
-            // 0x3XNN: skip next instruction if VX == NN
-            if (chip8->V[chip8->inst.X] == chip8->inst.NN)
+        case 5:
+            // 0x8XY5: sets VX -= VY, set VF to 0 if borrow, and 1 when not
+            if (chip8->V[chip8->inst.Y] > chip8->V[chip8->inst.X])
             {
-                chip8->PC += 2; // skip next op code.
+                chip8->V[0xF] = 0;
+                chip8->V[chip8->inst.X] -= chip8->V[chip8->inst.Y];
             }
-            break;
-
-        case 0x04:
-            // 0x4XNN: skip next instruction if VX != NN
-            if (chip8->V[chip8->inst.X] != chip8->inst.NN)
+            else
             {
-                chip8->PC += 2; // skip next op code.
+                chip8->V[0xF] = 1;
+                chip8->V[chip8->inst.X] -= chip8->V[chip8->inst.Y];
             }
             break;
 
-        case 0x05:
-            // 0x5XY0: skip next instruction if VX == VY
-            if (chip8->inst.N != 0)
+        case 6:
+            // 0x8XY6: sets VX >>= 1, stores shifted bit into VF.
+            chip8->V[0xF] = chip8->V[chip8->inst.X] & 1;
+            chip8->V[chip8->inst.X] >>= 1;
+
+            break;
+
+        case 7:
+            // 0x8XY7: sets VX = VY - VX, set VF to 0 if borrow, and 1 when not
+            if (chip8->V[chip8->inst.X] > chip8->V[chip8->inst.Y])
             {
-                break; // wrong opcode
+                chip8->V[0xF] = 0;
+                chip8->V[chip8->inst.X] = chip8->V[chip8->inst.Y] - chip8->V[chip8->inst.X];
             }
-            if (chip8->V[chip8->inst.X] == chip8->V[chip8->inst.Y])
+            else
             {
-                chip8->PC += 2; // skip next op code.
+                chip8->V[0xF] = 1;
+                chip8->V[chip8->inst.X] = chip8->V[chip8->inst.Y] - chip8->V[chip8->inst.X];
             }
             break;
 
-        case 0x06:
-            // 0x6XNN: sets VX to NN
-            chip8->V[chip8->inst.X] = chip8->inst.NN;
-            break;
-
-        case 0x07:
-            // 0x7XNN: sets register VX += NN
-            chip8->V[chip8->inst.X] += chip8->inst.NN;
-            break;
-
-        case 0x08:
-
-            switch (chip8->inst.N)
-            {
-            case 0:
-                // 0x8XY0: sets VX = VY
-                chip8->V[chip8->inst.X] = chip8->V[chip8->inst.Y];
-                break;
-
-            case 1:
-                // 0x8XY1: sets VX |= VY
-                chip8->V[chip8->inst.X] |= chip8->V[chip8->inst.Y];
-                break;
-
-            case 2:
-                // 0x8XY2: sets VX &= VY
-                chip8->V[chip8->inst.X] &= chip8->V[chip8->inst.Y];
-                break;
-
-            case 3:
-                // 0x8XY3: sets VX ^= VY
-                chip8->V[chip8->inst.X] ^= chip8->V[chip8->inst.Y];
-                break;
-
-            case 4:
-                // 0x8XY4: sets VX += VY, set VF to 1 if carry, and 0 when not
-                if ((uint16_t)(chip8->V[chip8->inst.X] + chip8->V[chip8->inst.Y]) > 255)
-                {
-                    chip8->V[0xF] = 1;
-                    chip8->V[chip8->inst.X] += chip8->V[chip8->inst.Y];
-                }
-                else
-                {
-                    chip8->V[0xF] = 0;
-                    chip8->V[chip8->inst.X] += chip8->V[chip8->inst.Y];
-                };
-                break;
-
-            case 5:
-                // 0x8XY5: sets VX -= VY, set VF to 0 if borrow, and 1 when not
-                if (chip8->V[chip8->inst.Y] > chip8->V[chip8->inst.X])
-                {
-                    chip8->V[0xF] = 0;
-                    chip8->V[chip8->inst.X] -= chip8->V[chip8->inst.Y];
-                }
-                else
-                {
-                    chip8->V[0xF] = 1;
-                    chip8->V[chip8->inst.X] -= chip8->V[chip8->inst.Y];
-                }
-                break;
-
-            case 6:
-                // 0x8XY6: sets VX >>= 1, stores shifted bit into VF.
-                chip8->V[0xF] = chip8->V[chip8->inst.X] & 1;
-                chip8->V[chip8->inst.X] >>= 1;
-
-                break;
-
-            case 7:
-                // 0x8XY7: sets VX = VY - VX, set VF to 0 if borrow, and 1 when not
-                if (chip8->V[chip8->inst.X] > chip8->V[chip8->inst.Y])
-                {
-                    chip8->V[0xF] = 0;
-                    chip8->V[chip8->inst.X] = chip8->V[chip8->inst.Y] - chip8->V[chip8->inst.X];
-                }
-                else
-                {
-                    chip8->V[0xF] = 1;
-                    chip8->V[chip8->inst.X] = chip8->V[chip8->inst.Y] - chip8->V[chip8->inst.X];
-                }
-                break;
-
-            case 0xE:
-                // 0x8XYE: sets VX <<= 1, stores shifted bit into VF.
-                chip8->V[0xF] = (chip8->V[chip8->inst.X] & 0x80) >> 7;
-                chip8->V[chip8->inst.X] <<= 1;
-                break;
-
-            default:
-                break; // wrong op code
-            }
-
-            break;
-
-        case 0x0A:
-            // 0xANNN: set index register I to NNN
-            chip8->I = chip8->inst.NNN;
-            break;
-
-        case 0x0D:
-            // 0xDXYN: Draw sprite at coordinate (VX, VY), read from memory location I
-            // sprite width 8, height N
-            // screen pixels are XOR'd with sprite bits
-            // VF (carry flag) set if any screen pixels are set off. Important for collision detection etc.
-            uint8_t X_pos = chip8->V[chip8->inst.X] % config.window_width;
-            uint8_t Y_pos = chip8->V[chip8->inst.Y] % config.window_height;
-            const uint8_t X_origin = X_pos;
-
-            chip8->V[0xF] = 0; // init carry flag to 0.
-
-            // loop over all N rows of sprite
-            for (uint8_t i = 0; i < (chip8->inst.N); i++)
-            {
-                // get next byte
-                const uint8_t sprite_data = chip8->ram[chip8->I + i];
-                X_pos = X_origin; // reset X to draw next row
-
-                for (int8_t j = 7; j >= 0; j--)
-                {
-                    // if sprite pixel bit is on and display pixel is on, set carry flag.
-                    bool *pixel = &chip8->display[Y_pos * config.window_width + X_pos];
-                    const bool sprite_bit = (sprite_data & (1 << j));
-                    if (sprite_bit && *pixel)
-                    {
-                        chip8->V[0xF] = 1;
-                    }
-
-                    // XOR display pixel with sprite pixel/bit to set it on or off
-                    *pixel ^= sprite_bit;
-
-                    // stop drawing if hit right edge of screen
-                    if (++X_pos >= config.window_width)
-                        break;
-                }
-                // stop drawing whole sprite if at bottom edge of screen
-                if (++Y_pos >= config.window_height)
-                    break;
-            }
+        case 0xE:
+            // 0x8XYE: sets VX <<= 1, stores shifted bit into VF.
+            chip8->V[0xF] = (chip8->V[chip8->inst.X] & 0x80) >> 7;
+            chip8->V[chip8->inst.X] <<= 1;
             break;
 
         default:
-            break; // invalid opcode
+            break; // wrong op code
         }
-    }
 
-    // MAIN FUNC
-    int main(int argc, char **argv)
+        break;
+
+    case 0x09:
+        // 0x9XY0: skip next instruction if VX != VY
+        if (chip8->inst.N != 0)
+        {
+            break; // wrong opcode
+        }
+        if (chip8->V[chip8->inst.X] != chip8->V[chip8->inst.Y])
+        {
+            chip8->PC += 2; // skip next op code.
+        }
+        break;
+
+    case 0x0A:
+        // 0xANNN: set index register I to NNN
+        chip8->I = chip8->inst.NNN;
+        break;
+
+    case 0x0D:
+        // 0xDXYN: Draw sprite at coordinate (VX, VY), read from memory location I
+        // sprite width 8, height N
+        // screen pixels are XOR'd with sprite bits
+        // VF (carry flag) set if any screen pixels are set off. Important for collision detection etc.
+        uint8_t X_pos = chip8->V[chip8->inst.X] % config.window_width;
+        uint8_t Y_pos = chip8->V[chip8->inst.Y] % config.window_height;
+        const uint8_t X_origin = X_pos;
+
+        chip8->V[0xF] = 0; // init carry flag to 0.
+
+        // loop over all N rows of sprite
+        for (uint8_t i = 0; i < (chip8->inst.N); i++)
+        {
+            // get next byte
+            const uint8_t sprite_data = chip8->ram[chip8->I + i];
+            X_pos = X_origin; // reset X to draw next row
+
+            for (int8_t j = 7; j >= 0; j--)
+            {
+                // if sprite pixel bit is on and display pixel is on, set carry flag.
+                bool *pixel = &chip8->display[Y_pos * config.window_width + X_pos];
+                const bool sprite_bit = (sprite_data & (1 << j));
+                if (sprite_bit && *pixel)
+                {
+                    chip8->V[0xF] = 1;
+                }
+
+                // XOR display pixel with sprite pixel/bit to set it on or off
+                *pixel ^= sprite_bit;
+
+                // stop drawing if hit right edge of screen
+                if (++X_pos >= config.window_width)
+                    break;
+            }
+            // stop drawing whole sprite if at bottom edge of screen
+            if (++Y_pos >= config.window_height)
+                break;
+        }
+        break;
+
+    default:
+        break; // invalid opcode
+    }
+}
+
+// MAIN FUNC
+int main(int argc, char **argv)
+{
+    // default usage message for args
+    if (argc < 2)
     {
-        // default usage message for args
-        if (argc < 2)
-        {
-            fprintf(stderr, "\nNo ROM selected.\nCorrect Usage: %s <rom_name>\n\n", argv[0]);
-            exit(EXIT_FAILURE);
-        }
-
-        // Initialise emulator config.
-        config_t config = {0};
-        if (!setConfig_Args(&config, argc, argv))
-        {
-            exit(EXIT_FAILURE);
-        };
-
-        // Initialise SDL.
-        sdl_t sdl = {0};
-        if (!initSDL(&sdl, config))
-        {
-            exit(EXIT_FAILURE);
-        };
-
-        // Initialise CHIP-8 machine.
-        chip8_t chip8 = {0};
-        const char *rom_name = argv[1];
-        if (!initCHIP(&chip8, rom_name))
-            exit(EXIT_FAILURE);
-
-        // Initial screen clear to background configuration.
-        clearWindow(sdl, config);
-
-        // Main emulator loop
-        while (chip8.state != QUIT)
-        {
-            // Handle user inputs.
-            handleInput(&chip8);
-
-            // if paused continue.
-            if (chip8.state == PAUSED)
-                continue;
-
-            // Get time()
-            // Emulate CHIP8 instructions
-            emulateInstructions(&chip8, config);
-            // Get time changed from last get time()
-
-            // Delay for 60FPS!
-            SDL_Delay(16.67); //-actual time elapsed!!!!!!!!!!!!!!!!!
-            // Update window with changes.
-            updateScreen(sdl, config, chip8);
-        }
-
-        // Final cleanup before interpreter exit.
-        finalCleanUp(&sdl);
-
-        exit(EXIT_SUCCESS);
+        fprintf(stderr, "\nNo ROM selected.\nCorrect Usage: %s <rom_name>\n\n", argv[0]);
+        exit(EXIT_FAILURE);
     }
+
+    // Initialise emulator config.
+    config_t config = {0};
+    if (!setConfig_Args(&config, argc, argv))
+    {
+        exit(EXIT_FAILURE);
+    };
+
+    // Initialise SDL.
+    sdl_t sdl = {0};
+    if (!initSDL(&sdl, config))
+    {
+        exit(EXIT_FAILURE);
+    };
+
+    // Initialise CHIP-8 machine.
+    chip8_t chip8 = {0};
+    const char *rom_name = argv[1];
+    if (!initCHIP(&chip8, rom_name))
+        exit(EXIT_FAILURE);
+
+    // Initial screen clear to background configuration.
+    clearWindow(sdl, config);
+
+    // Main emulator loop
+    while (chip8.state != QUIT)
+    {
+        // Handle user inputs.
+        handleInput(&chip8);
+
+        // if paused continue.
+        if (chip8.state == PAUSED)
+            continue;
+
+        // Get time()
+        // Emulate CHIP8 instructions
+        emulateInstructions(&chip8, config);
+        // Get time changed from last get time()
+
+        // Delay for 60FPS!
+        SDL_Delay(16.67); //-actual time elapsed!!!!!!!!!!!!!!!!!
+        // Update window with changes.
+        updateScreen(sdl, config, chip8);
+    }
+
+    // Final cleanup before interpreter exit.
+    finalCleanUp(&sdl);
+
+    exit(EXIT_SUCCESS);
+}
