@@ -6,6 +6,10 @@ CHIP-8 is an interpreted programming language that was designed for early person
 ## Implemented Features
   - **SDL Integration:** This project utilises the SDL libraries for **window creation, rendering, and the handling of user input**.
   - **Emulator Configuration:** The emulator can be configured using a `config_t` struct, allowing users to set parameters such as window size, colours, and scale factor.
+  - **Emulation Logic:** Implements the main CHIP-8 instruction set for executing ROMs.
+  - **Graphics Rendering:** Handles graphics output, including pixel states and screen updates.
+  - **Input Processing:** Manages user input to interact with CHIP-8 programs.
+  - **Debugging Support:** Includes optional debugging functionality to aid in development (enabled via `DEBUG` flag).
 
 ## Getting Started
 Follow these steps to get started with the interpreter:
